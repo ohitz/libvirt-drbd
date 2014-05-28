@@ -1,0 +1,61 @@
+#!/bin/bash
+#
+# Copyright (C) 2014 Oliver Hitz <oliver@net-track.ch>
+#
+# This script is a libvirt hook to automatically promote/demote DRBD
+# resources.
+# 
+# Place the "qemu" script in /etc/libvirt/hooks/ and it will
+# automatically promote and demote DRBD resources configured in libvirt
+# guests when the guests are started or shut down.
+# 
+# In order for the DRBD resources to be recognized as such, they need to
+# be configured with the /dev/drbd/by-res/<name> path.
+# 
+# The script requires the xpath command from the libxml-xpath-perl
+# package.
+# 
+# The latest version of the script is at
+# https://github.com/ohitz/libvirt-drbd
+
+guest_name=$1
+task=$2
+
+# The entire XML configuration is given on stdin and is written to a temporary
+# file.
+guest_cfg=/tmp/libvirt.qemuhook.tmp.$guest_name.$$
+cat - > $guest_cfg
+
+case "$task" in
+prepare)
+  # "qemu <guest> prepare", means that libvirt is preparing to start the guest.
+  for dev in `xpath -q -e "/domain/devices/disk/source/@dev" $guest_cfg | cut -d \" -f 2`; do
+    drbd_resource=`echo $dev | sed 's|^/dev/drbd/by-res/||'`
+    if [ "x$drbd_resource" != "x$dev" ]; then
+      drbd_role="$(/sbin/drbdadm role $drbd_resource)"
+      drbd_lrole="${drbd_role%%/*}"
+      if [ "$drbd_lrole" != 'Primary' ]; then
+        /sbin/drbdadm primary $drbd_resource || exit 1
+      fi
+    fi
+  done
+  ;;
+release)
+  # "qemu <guest> release", means that the guest has been shutdown.
+  for dev in `xpath -q -e "/domain/devices/disk/source/@dev" $guest_cfg | cut -d \" -f 2`; do
+    drbd_resource=`echo $dev | sed 's|^/dev/drbd/by-res/||'`
+    if [ "x$drbd_resource" != "x$dev" ]; then
+      drbd_role="$(/sbin/drbdadm role $drbd_resource)"
+      drbd_lrole="${drbd_role%%/*}"
+      if [ "$drbd_lrole" = 'Primary' ]; then
+        /sbin/drbdadm secondary $drbd_resource || exit 1
+      fi
+    fi
+  done
+  ;;
+esac
+
+# Remove temporary file.
+rm -f $guest_cfg
+
+exit 0
