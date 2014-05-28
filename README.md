@@ -6,7 +6,10 @@ resources.
 
 Place the "qemu" script in /etc/libvirt/hooks/ and it will
 automatically promote and demote DRBD resources configured in libvirt
-guests when the guests are started or shut down.
+guests when the guests are started or shut down. After installing it,
+the libvirt management daemon needs to be reloaded:
+
+/etc/init.d/libvirt-bin reload
  
 In order for the DRBD resources to be recognized as such, they need to
 be configured with the /dev/drbd/by-res/<name> path.
