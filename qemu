@@ -18,17 +18,32 @@
 # The latest version of the script is at
 # https://github.com/ohitz/libvirt-drbd
 
+function cleanup() {
+  if [ -n "$guest_cfg" ]; then
+    rm -f $guest_cfg
+  fi
+}
+
+trap cleanup EXIT
+
+if [ "$#" -ne 4 ]; then
+  echo "$0: Illegal number of parameters." >&2
+  exit 1
+fi
+
 guest_name=$1
 task=$2
 
-# The entire XML configuration is given on stdin and is written to a temporary
-# file.
-guest_cfg=/tmp/libvirt.qemuhook.tmp.$guest_name.$$
-cat - > $guest_cfg
+# Create temporary file to hold the configuration.
+guest_cfg=`mktemp`
 
 case "$task" in
 prepare)
   # "qemu <guest> prepare", means that libvirt is preparing to start the guest.
+
+  # Read XML configuration on stdin.
+  cat - > $guest_cfg
+
   for dev in `xpath -q -e "/domain/devices/disk/source/@dev" $guest_cfg | cut -d \" -f 2`; do
     drbd_resource=`echo $dev | sed 's|^/dev/drbd/by-res/||'`
     if [ "x$drbd_resource" != "x$dev" ]; then
@@ -42,6 +57,10 @@ prepare)
   ;;
 release)
   # "qemu <guest> release", means that the guest has been shutdown.
+
+  # Read XML configuration on stdin.
+  cat - > $guest_cfg
+
   for dev in `xpath -q -e "/domain/devices/disk/source/@dev" $guest_cfg | cut -d \" -f 2`; do
     drbd_resource=`echo $dev | sed 's|^/dev/drbd/by-res/||'`
     if [ "x$drbd_resource" != "x$dev" ]; then
@@ -54,8 +73,5 @@ release)
   done
   ;;
 esac
-
-# Remove temporary file.
-rm -f $guest_cfg
 
 exit 0
