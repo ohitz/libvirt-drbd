@@ -1,6 +1,7 @@
 #!/bin/bash
 #
 # Copyright (C) 2014 Oliver Hitz <oliver@net-track.ch>
+# Copyright (C) 2016 Marc Ponschab <marc@ponschab.de>
 #
 # This script is a libvirt hook to automatically promote/demote DRBD
 # resources.
@@ -12,16 +13,35 @@
 # In order for the DRBD resources to be recognized as such, they need to
 # be configured with the /dev/drbd/by-res/<name> path.
 # 
-# The script requires the xpath command from the libxml-xpath-perl
-# package.
+# The script requires the xmllint command from the libxml package.
 # 
 # The latest version of the script is at
 # https://github.com/ohitz/libvirt-drbd
+
+# If qemu does't release the drbrd device immediately, make MAX_ATTEMPTS attemps after waiting SLEEP_BETWEEN_ATTEMPTS
+MAX_ATTEMPTS=10;
+SLEEP_BETWEEN_ATTEMPTS=1;
 
 function cleanup() {
   if [ -n "$guest_cfg" ]; then
     rm -f $guest_cfg
   fi
+}
+
+function selectDrbdDevices() {
+  xmllint --xpath "/domain/devices/disk/source[starts-with(@dev, '/dev/drbd/by-res/')]/@dev" $1;
+}
+
+function setRole() {
+  role=$1;
+  resourceName=$(echo $2 | sed -e 's|^dev="/dev/drbd/by-res/\(.*\)"|\1|');
+  for i in $(seq $MAX_ATTEMPTS); do
+    #echo "attempt $i: drbdadm $role $resourceName" >>/var/log/libvirt/hook-qemu.log
+    /sbin/drbdadm $role $resourceName && return;
+    sleep $SLEEP_BETWEEN_ATTEMPTS;
+  done
+  echo "$MAX_ATTEMPTS attempts executing \"drbdadm $role $resourceName failed, giving up.\""  >&2
+  exit 1
 }
 
 trap cleanup EXIT
@@ -44,15 +64,8 @@ prepare)
   # Read XML configuration on stdin.
   cat - > $guest_cfg
 
-  for dev in `xpath -q -e "/domain/devices/disk/source/@dev" $guest_cfg | cut -d \" -f 2`; do
-    drbd_resource=`echo $dev | sed 's|^/dev/drbd/by-res/||'`
-    if [ "x$drbd_resource" != "x$dev" ]; then
-      drbd_role="$(/sbin/drbdadm role $drbd_resource)"
-      drbd_lrole="${drbd_role%%/*}"
-      if [ "$drbd_lrole" != 'Primary' ]; then
-        /sbin/drbdadm primary $drbd_resource || exit 1
-      fi
-    fi
+  for dev in $(selectDrbdDevices $guest_cfg); do
+    setRole primary $dev;
   done
   ;;
 release)
@@ -61,17 +74,11 @@ release)
   # Read XML configuration on stdin.
   cat - > $guest_cfg
 
-  for dev in `xpath -q -e "/domain/devices/disk/source/@dev" $guest_cfg | cut -d \" -f 2`; do
-    drbd_resource=`echo $dev | sed 's|^/dev/drbd/by-res/||'`
-    if [ "x$drbd_resource" != "x$dev" ]; then
-      drbd_role="$(/sbin/drbdadm role $drbd_resource)"
-      drbd_lrole="${drbd_role%%/*}"
-      if [ "$drbd_lrole" = 'Primary' ]; then
-        /sbin/drbdadm secondary $drbd_resource || exit 1
-      fi
-    fi
+  for dev in $(selectDrbdDevices $guest_cfg); do
+    setRole secondary $dev;
   done
   ;;
 esac
 
 exit 0
+
